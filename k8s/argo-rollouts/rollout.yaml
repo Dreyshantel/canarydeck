@@ -1,0 +1,48 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: canarydeck
+  namespace: default
+  labels: { app: canarydeck-argo }
+spec:
+  replicas: 4
+  selector:
+    matchLabels: { app: canarydeck-argo }
+  template:
+    metadata:
+      labels: { app: canarydeck-argo }
+    spec:
+      containers:
+        - name: canarydeck
+          # Pinned to a real tag, never :latest, see policy/no_latest_tag.rego
+          image: canarydeck:0.1.0
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef: { name: canarydeck-config }
+          securityContext:
+            runAsNonRoot: true
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "300m", memory: "256Mi" }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 3000 }
+            initialDelaySeconds: 3
+  strategy:
+    canary:
+      # This is the part a basic tutorial canary skips: the rollout does
+      # not just wait a fixed time and hope, it pauses and asks
+      # AnalysisTemplate (below) a real statistical question before
+      # continuing to the next weight step.
+      steps:
+        - setWeight: 20
+        - pause: { duration: 60 }
+        - analysis:
+            templates:
+              - templateName: canarydeck-success-rate
+        - setWeight: 50
+        - pause: { duration: 60 }
+        - analysis:
+            templates:
+              - templateName: canarydeck-success-rate
+        - setWeight: 100

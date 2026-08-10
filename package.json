@@ -1,0 +1,17 @@
+{
+  "name": "canarydeck",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "migrate": "node src/migrate.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.13.0",
+    "prom-client": "^15.1.3",
+    "zod": "^3.23.8"
+  }
+}

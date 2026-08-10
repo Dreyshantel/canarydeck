@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canarydeck-config
+data:
+  DATABASE_URL: "postgresql://canarydeck:canarydeck_dev_password@postgres:5432/canarydeck"
+---
+# Argo Rollouts automatically manages stable/canary label injection and
+# the two Services below when referenced from a Rollout's trafficRouting
+# config. Kept explicit here so the split is visible rather than hidden
+# behind controller magic, since the Prometheus queries in
+# scripts/canary-analysis.js depend on these exact selector labels.
+apiVersion: v1
+kind: Service
+metadata:
+  name: canarydeck-argo-stable
+spec:
+  selector:
+    app: canarydeck-argo
+  ports:
+    - port: 80
+      targetPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canarydeck-argo-canary
+spec:
+  selector:
+    app: canarydeck-argo
+  ports:
+    - port: 80
+      targetPort: 3000

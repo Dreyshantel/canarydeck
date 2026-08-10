@@ -1,0 +1,65 @@
+{
+  "name": "CanaryDeck - Rollout Decision Notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "canarydeck-rollout-decision",
+        "responseMode": "onReceived"
+      },
+      "name": "Rollout Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "notes": "Argo Rollouts or Flagger POSTs here after an analysis run completes. See README 'Wiring up notifications' for the kubectl/Flagger webhook config that calls this URL."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json[\"status\"]}}",
+              "value2": "failed"
+            }
+          ]
+        }
+      },
+      "name": "Did it fail?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "text": "=🔴 Canary rollout FAILED for {{$json[\"service\"]}}. Automated analysis rejected the canary, see the AnalysisRun for the Mann-Whitney U result. Rolled back automatically.",
+        "otherOptions": {}
+      },
+      "name": "Notify - Rollback",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [680, 220],
+      "notes": "Swap for Discord, Telegram, or email nodes, whichever the team actually uses. The point is a real notification, not this specific service."
+    },
+    {
+      "parameters": {
+        "text": "=🟢 Canary rollout PROMOTED for {{$json[\"service\"]}}. Statistical analysis found no significant regression.",
+        "otherOptions": {}
+      },
+      "name": "Notify - Promoted",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [680, 380]
+    }
+  ],
+  "connections": {
+    "Rollout Webhook": {
+      "main": [[{ "node": "Did it fail?", "type": "main", "index": 0 }]]
+    },
+    "Did it fail?": {
+      "main": [
+        [{ "node": "Notify - Rollback", "type": "main", "index": 0 }],
+        [{ "node": "Notify - Promoted", "type": "main", "index": 0 }]
+      ]
+    }
+  }
+}

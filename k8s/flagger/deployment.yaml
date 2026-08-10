@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canarydeck-flagger
+spec:
+  replicas: 4
+  selector:
+    matchLabels: { app: canarydeck-flagger }
+  template:
+    metadata:
+      labels: { app: canarydeck-flagger }
+    spec:
+      containers:
+        - name: canarydeck
+          image: canarydeck:0.1.0
+          ports:
+            - containerPort: 3000
+          envFrom:
+            - configMapRef: { name: canarydeck-config }
+          securityContext:
+            runAsNonRoot: true
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "300m", memory: "256Mi" }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 3000 }
+            initialDelaySeconds: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canarydeck-flagger
+spec:
+  selector: { app: canarydeck-flagger }
+  ports:
+    - port: 80
+      targetPort: 3000
