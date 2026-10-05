@@ -1,19 +1,13 @@
 #!/usr/bin/env node
 /**
- * Statistical canary analysis, the actual method behind Project 1, not a
- * simple "error rate under 5%" threshold. This mirrors what Kayenta
- * (Netflix/Google's open source canary tool) does: pull metric samples
- * for the baseline and the canary, run the Mann-Whitney U test to ask
- * "are these two distributions actually different," and only then decide.
+ * Statistical canary analysis using Mann-Whitney U.
  *
- * A threshold check answers "is the canary bad in isolation." A
- * statistical test answers "is the canary different from the baseline
- * right now," which is the question that actually matters, since
- * "acceptable" error rate varies by time of day, load, and a dozen other
- * factors a fixed threshold cannot see.
+ * Compares stable and canary revisions using:
+ * 1. Error rate
+ * 2. p99 latency
  *
- * Exit code 0 = promote, exit code 1 = fail. Argo Rollouts' Job provider
- * reads this exit code directly (see k8s/argo-rollouts/analysistemplate.yaml).
+ * Exit code 0 = promote
+ * Exit code 1 = fail
  */
 
 const http = require("http");
@@ -21,19 +15,31 @@ const http = require("http");
 const PROMETHEUS_URL = process.env.PROMETHEUS_URL || "http://prometheus:9090";
 const SAMPLE_WINDOW = "1m";
 const SAMPLE_COUNT = 10;
-const SAMPLE_INTERVAL_MS = 6000; // 10 samples over ~1 minute
+const SAMPLE_INTERVAL_MS = 6000;
+
+const stableHash = process.env.STABLE_HASH;
+const canaryHash = process.env.CANARY_HASH;
+
+if (!stableHash || !canaryHash) {
+  console.error("STABLE_HASH and CANARY_HASH must be provided.");
+  process.exit(1);
+}
 
 function queryPrometheus(query) {
   return new Promise((resolve, reject) => {
     const url = `${PROMETHEUS_URL}/api/v1/query?query=${encodeURIComponent(query)}`;
+
     http
       .get(url, (res) => {
         let body = "";
+
         res.on("data", (chunk) => (body += chunk));
+
         res.on("end", () => {
           try {
             const parsed = JSON.parse(body);
             const value = parsed?.data?.result?.[0]?.value?.[1];
+
             resolve(value !== undefined ? parseFloat(value) : null);
           } catch (err) {
             reject(err);
@@ -48,36 +54,47 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Mann-Whitney U test. Ranks the combined samples, sums ranks for the
- * first group, derives U, and returns a z-score. This is a real
- * implementation, not a stub, matching the test Kayenta itself uses.
- */
 function mannWhitneyU(sampleA, sampleB) {
   const combined = [
     ...sampleA.map((v) => ({ v, group: "a" })),
     ...sampleB.map((v) => ({ v, group: "b" })),
   ].sort((x, y) => x.v - y.v);
 
-  // Assign ranks, averaging ties.
   let i = 0;
+
   while (i < combined.length) {
     let j = i;
-    while (j < combined.length && combined[j].v === combined[i].v) j++;
+
+    while (j < combined.length && combined[j].v === combined[i].v) {
+      j++;
+    }
+
     const avgRank = (i + 1 + j) / 2;
-    for (let k = i; k < j; k++) combined[k].rank = avgRank;
+
+    for (let k = i; k < j; k++) {
+      combined[k].rank = avgRank;
+    }
+
     i = j;
   }
 
-  const rankSumA = combined.filter((c) => c.group === "a").reduce((s, c) => s + c.rank, 0);
+  const rankSumA = combined
+    .filter((c) => c.group === "a")
+    .reduce((s, c) => s + c.rank, 0);
+
   const nA = sampleA.length;
   const nB = sampleB.length;
+
   const uA = rankSumA - (nA * (nA + 1)) / 2;
   const uB = nA * nB - uA;
   const u = Math.min(uA, uB);
 
   const meanU = (nA * nB) / 2;
-  const stdU = Math.sqrt((nA * nB * (nA + nB + 1)) / 12);
+
+  const stdU = Math.sqrt(
+    (nA * nB * (nA + nB + 1)) / 12
+  );
+
   const z = stdU === 0 ? 0 : (u - meanU) / stdU;
 
   return { u, z };
@@ -85,60 +102,181 @@ function mannWhitneyU(sampleA, sampleB) {
 
 async function collectSamples(query) {
   const samples = [];
+
   for (let i = 0; i < SAMPLE_COUNT; i++) {
     const value = await queryPrometheus(query);
-    if (value !== null) samples.push(value);
+
+    if (value !== null) {
+      samples.push(value);
+    }
+
     await sleep(SAMPLE_INTERVAL_MS);
   }
+
   return samples;
 }
 
 async function main() {
-  console.log("Collecting baseline (stable) and canary error rate samples...");
+  console.log(
+    "Collecting stable and canary error rate and p99 latency samples..."
+  );
 
   const stableErrorRateQuery =
-    'sum(rate(http_requests_total{app="canarydeck-argo-stable",status=~"5.."}[' +
-    SAMPLE_WINDOW +
-    '])) / sum(rate(http_requests_total{app="canarydeck-argo-stable"}[' +
-    SAMPLE_WINDOW +
-    "]))";
-  const canaryErrorRateQuery =
-    'sum(rate(http_requests_total{app="canarydeck-argo-canary",status=~"5.."}[' +
-    SAMPLE_WINDOW +
-    '])) / sum(rate(http_requests_total{app="canarydeck-argo-canary"}[' +
-    SAMPLE_WINDOW +
-    "]))";
+    `(
+      sum(rate(http_requests_total{rollouts_pod_template_hash="${stableHash}",status=~"5.."}[${SAMPLE_WINDOW}]))
+      or vector(0)
+    )
+    /
+    sum(rate(http_requests_total{rollouts_pod_template_hash="${stableHash}"}[${SAMPLE_WINDOW}]))`;
 
-  const [stableSamples, canarySamples] = await Promise.all([
+  const canaryErrorRateQuery =
+    `(
+      sum(rate(http_requests_total{rollouts_pod_template_hash="${canaryHash}",status=~"5.."}[${SAMPLE_WINDOW}]))
+      or vector(0)
+    )
+    /
+    sum(rate(http_requests_total{rollouts_pod_template_hash="${canaryHash}"}[${SAMPLE_WINDOW}]))`;
+
+  const stableP99Query =
+    `histogram_quantile(
+      0.99,
+      sum(
+        rate(http_request_duration_seconds_bucket{
+          rollouts_pod_template_hash="${stableHash}"
+        }[${SAMPLE_WINDOW}])
+      ) by (le)
+    )`;
+
+  const canaryP99Query =
+    `histogram_quantile(
+      0.99,
+      sum(
+        rate(http_request_duration_seconds_bucket{
+          rollouts_pod_template_hash="${canaryHash}"
+        }[${SAMPLE_WINDOW}])
+      ) by (le)
+    )`;
+
+  console.log("Stable hash:", stableHash);
+  console.log("Canary hash:", canaryHash);
+
+  const [
+    stableErrorSamples,
+    canaryErrorSamples,
+    stableP99Samples,
+    canaryP99Samples,
+  ] = await Promise.all([
     collectSamples(stableErrorRateQuery),
     collectSamples(canaryErrorRateQuery),
+    collectSamples(stableP99Query),
+    collectSamples(canaryP99Query),
   ]);
 
-  if (stableSamples.length < 3 || canarySamples.length < 3) {
-    console.error("Not enough samples collected to run a meaningful test. Failing closed.");
+  if (
+    stableErrorSamples.length < 3 ||
+    canaryErrorSamples.length < 3 ||
+    stableP99Samples.length < 3 ||
+    canaryP99Samples.length < 3
+  ) {
+    console.error(
+      "Not enough samples collected for error rate or p99 latency. Failing closed."
+    );
     process.exit(1);
   }
 
-  const { u, z } = mannWhitneyU(stableSamples, canarySamples);
-  const canaryMean = canarySamples.reduce((a, b) => a + b, 0) / canarySamples.length;
-  const stableMean = stableSamples.reduce((a, b) => a + b, 0) / stableSamples.length;
+  const errorRateTest = mannWhitneyU(
+    stableErrorSamples,
+    canaryErrorSamples
+  );
 
-  console.log(`Stable mean error rate: ${stableMean.toFixed(4)}`);
-  console.log(`Canary mean error rate: ${canaryMean.toFixed(4)}`);
-  console.log(`Mann-Whitney U: ${u.toFixed(2)}, z-score: ${z.toFixed(2)}`);
+  const p99Test = mannWhitneyU(
+    stableP99Samples,
+    canaryP99Samples
+  );
 
-  // |z| > 1.96 corresponds to p < 0.05, a statistically significant
-  // difference. The canary only fails if it is significantly WORSE, not
-  // merely different, an improvement should never fail a canary.
-  const significantlyDifferent = Math.abs(z) > 1.96;
-  const canaryIsWorse = canaryMean > stableMean;
+  const stableErrorMean =
+    stableErrorSamples.reduce((a, b) => a + b, 0) /
+    stableErrorSamples.length;
 
-  if (significantlyDifferent && canaryIsWorse) {
-    console.error("FAIL: canary error rate is statistically significantly worse than baseline.");
+  const canaryErrorMean =
+    canaryErrorSamples.reduce((a, b) => a + b, 0) /
+    canaryErrorSamples.length;
+
+  const stableP99Mean =
+    stableP99Samples.reduce((a, b) => a + b, 0) /
+    stableP99Samples.length;
+
+  const canaryP99Mean =
+    canaryP99Samples.reduce((a, b) => a + b, 0) /
+    canaryP99Samples.length;
+
+  console.log(
+    `Stable mean error rate: ${stableErrorMean.toFixed(4)}`
+  );
+
+  console.log(
+    `Canary mean error rate: ${canaryErrorMean.toFixed(4)}`
+  );
+
+  console.log(
+    `Error rate Mann-Whitney U: ${errorRateTest.u.toFixed(2)}, z-score: ${errorRateTest.z.toFixed(2)}`
+  );
+
+  console.log(
+    `Stable mean p99 latency: ${stableP99Mean.toFixed(4)}s`
+  );
+
+  console.log(
+    `Canary mean p99 latency: ${canaryP99Mean.toFixed(4)}s`
+  );
+
+  console.log(
+    `p99 latency Mann-Whitney U: ${p99Test.u.toFixed(2)}, z-score: ${p99Test.z.toFixed(2)}`
+  );
+
+  const errorRateSignificant =
+    Math.abs(errorRateTest.z) > 1.96;
+
+  const errorRateWorse =
+    canaryErrorMean > stableErrorMean;
+
+  const errorRateRegression =
+    errorRateSignificant && errorRateWorse;
+
+  const p99Significant =
+    Math.abs(p99Test.z) > 1.96;
+
+  const p99Worse =
+    canaryP99Mean > stableP99Mean;
+
+  const p99Regression =
+    p99Significant && p99Worse;
+
+  console.log(`Error rate regression: ${errorRateRegression}`);
+  console.log(`p99 latency regression: ${p99Regression}`);
+
+  if (errorRateRegression || p99Regression) {
+    console.error("FAIL: canary regression detected.");
+
+    if (errorRateRegression) {
+      console.error(
+        "Reason: error rate is statistically significantly worse than baseline."
+      );
+    }
+
+    if (p99Regression) {
+      console.error(
+        "Reason: p99 latency is statistically significantly worse than baseline."
+      );
+    }
+
     process.exit(1);
   }
 
-  console.log("PASS: no statistically significant regression detected.");
+  console.log(
+    "PASS: no statistically significant regression detected in error rate or p99 latency."
+  );
+
   process.exit(0);
 }
 

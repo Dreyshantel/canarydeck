@@ -13,6 +13,10 @@ kind: AnalysisTemplate
 metadata:
   name: canarydeck-success-rate
 spec:
+  args:
+  - name: stable-hash
+  - name: canary-hash
+
   metrics:
     - name: statistical-canary-analysis
       # No successCondition needed, the Job provider reads the script's
@@ -32,6 +36,14 @@ spec:
                     env:
                       - name: PROMETHEUS_URL
                         value: "http://prometheus:9090"
+
+                      - name: STABLE_HASH
+                        value: "{{args.stable-hash}}"
+
+                      - name: CANARY_HASH
+                        value: "{{args.canary-hash}}"
+
+
                     volumeMounts:
                       - name: script
                         mountPath: /scripts

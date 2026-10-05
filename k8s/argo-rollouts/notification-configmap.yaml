@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argo-rollouts-notification-configmap
+  namespace: argo-rollouts
+data:
+  service.webhook.n8n: |
+    url: http://172.18.0.1:5678/webhook/canarydeck-rollout-decision
+    headers:
+      - name: Content-Type
+        value: application/json
+
+  template.rollout-completed: |
+    webhook:
+      n8n:
+        method: POST
+        body: |
+          {
+            "status": "promoted",
+            "service": "canarydeck",
+            "rollout": "{{.rollout.metadata.name}}"
+          }
+
+  template.rollout-aborted: |
+    webhook:
+      n8n:
+        method: POST
+        body: |
+          {
+            "status": "failed",
+            "service": "canarydeck",
+            "rollout": "{{.rollout.metadata.name}}"
+          }
+
+  trigger.on-rollout-completed: |
+    - description: Rollout completed successfully
+      when: rollout.status.phase == 'Healthy'
+      send:
+        - rollout-completed
+
+  trigger.on-rollout-aborted: |
+    - description: Rollout aborted
+      when: rollout.status.phase == 'Degraded'
+      send:
+        - rollout-aborted

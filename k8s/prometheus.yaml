@@ -14,6 +14,9 @@ data:
           - source_labels: [__meta_kubernetes_pod_label_app]
             regex: canarydeck.*
             action: keep
+
+          - source_labels: [__meta_kubernetes_pod_label_rollouts_pod_template_hash]
+            target_label: rollouts_pod_template_hash
 ---
 apiVersion: apps/v1
 kind: Deployment

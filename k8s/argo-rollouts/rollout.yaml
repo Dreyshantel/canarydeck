@@ -4,6 +4,9 @@ metadata:
   name: canarydeck
   namespace: default
   labels: { app: canarydeck-argo }
+  annotations:
+    notifications.argoproj.io/subscribe.on-rollout-completed.n8n: ""
+    notifications.argoproj.io/subscribe.on-rollout-aborted.n8n: ""
 spec:
   replicas: 4
   selector:
@@ -11,11 +14,13 @@ spec:
   template:
     metadata:
       labels: { app: canarydeck-argo }
+      annotations:
+        canarydeck/revision: "3"
     spec:
       containers:
         - name: canarydeck
           # Pinned to a real tag, never :latest, see policy/no_latest_tag.rego
-          image: canarydeck:0.1.0
+          image: canarydeck:0.2.2
           ports:
             - containerPort: 3000
           envFrom:
@@ -30,6 +35,8 @@ spec:
             initialDelaySeconds: 3
   strategy:
     canary:
+      stableService: canarydeck-argo-stable
+      canaryService: canarydeck-argo-canary
       # This is the part a basic tutorial canary skips: the rollout does
       # not just wait a fixed time and hope, it pauses and asks
       # AnalysisTemplate (below) a real statistical question before
@@ -37,12 +44,31 @@ spec:
       steps:
         - setWeight: 20
         - pause: { duration: 60 }
+
         - analysis:
             templates:
               - templateName: canarydeck-success-rate
+            args:
+              - name: stable-hash
+                valueFrom:
+                  podTemplateHashValue: Stable
+              - name: canary-hash
+                valueFrom:
+                  podTemplateHashValue: Latest
+
         - setWeight: 50
         - pause: { duration: 60 }
+
         - analysis:
             templates:
               - templateName: canarydeck-success-rate
+            args:
+              - name: stable-hash
+                valueFrom:
+                  podTemplateHashValue: Stable
+              - name: canary-hash
+                valueFrom:
+                  podTemplateHashValue: Latest
+
         - setWeight: 100
+

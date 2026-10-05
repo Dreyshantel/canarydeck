@@ -7,26 +7,29 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: canarydeck-flagger
+
   service:
     port: 80
     targetPort: 3000
+
   analysis:
-    # Flagger's own progression model: step weight, interval between
-    # steps, and a threshold of failed checks before it gives up and
-    # rolls back automatically. Compare this shape directly against
-    # k8s/argo-rollouts/rollout.yaml's steps list, same job, different
-    # controller, different mental model, that comparison IS Project 1's
-    # point.
     interval: 60s
     threshold: 5
     stepWeight: 20
     maxWeight: 100
+
     metrics:
-      - name: request-success-rate
+      - name: canarydeck-success-rate
+        templateRef:
+          name: canarydeck-success-rate
         thresholdRange:
           min: 95
         interval: 1m
-      - name: request-duration
+
+      - name: canarydeck-request-duration
+        templateRef:
+          name: canarydeck-request-duration
         thresholdRange:
           max: 500
         interval: 1m
+

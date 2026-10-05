@@ -24,7 +24,7 @@ COPY src ./src
 COPY migrations ./migrations
 
 RUN useradd -r -u 10001 canarydeck
-USER canarydeck
+USER 10001
 
 EXPOSE 3000
 CMD ["node", "src/index.js"]

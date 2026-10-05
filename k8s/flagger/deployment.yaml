@@ -12,7 +12,7 @@ spec:
     spec:
       containers:
         - name: canarydeck
-          image: canarydeck:0.1.0
+          image: canarydeck:0.1.1
           ports:
             - containerPort: 3000
           envFrom:

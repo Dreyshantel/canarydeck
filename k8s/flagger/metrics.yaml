@@ -1,0 +1,31 @@
+apiVersion: flagger.app/v1beta1
+kind: MetricTemplate
+metadata:
+  name: canarydeck-success-rate
+spec:
+  provider:
+    type: prometheus
+    address: http://prometheus.default:9090
+  query: |
+    100 * (
+      sum(rate(http_requests_total{status!~"5.."}[1m]))
+      /
+      sum(rate(http_requests_total[1m]))
+    )
+
+---
+apiVersion: flagger.app/v1beta1
+kind: MetricTemplate
+metadata:
+  name: canarydeck-request-duration
+spec:
+  provider:
+    type: prometheus
+    address: http://prometheus.default:9090
+  query: |
+    histogram_quantile(
+      0.99,
+      sum(
+        rate(http_request_duration_seconds_bucket[1m])
+      ) by (le)
+    ) * 1000
